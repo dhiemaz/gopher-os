@@ -35,6 +35,10 @@ const (
 )
 
 type framePool struct {
+	// reclaimable indicates that this region can be reclaimed after
+	// the kernel has processed its contents.
+	reclaimable bool
+
 	// startFrame is the frame number for the first page in this pool.
 	// each free bitmap entry i corresponds to frame (startFrame + i).
 	startFrame pmm.Frame
@@ -92,7 +96,9 @@ func (alloc *BitmapAllocator) setupPoolBitmaps() *kernel.Error {
 	// Detect available memory regions and calculate their pool bitmap
 	// requirements.
 	multiboot.VisitMemRegions(func(region *multiboot.MemoryMapEntry) bool {
-		if region.Type != multiboot.MemAvailable {
+		switch region.Type {
+		case multiboot.MemAvailable, multiboot.MemAcpiReclaimable:
+		default:
 			return true
 		}
 
@@ -140,7 +146,9 @@ func (alloc *BitmapAllocator) setupPoolBitmaps() *kernel.Error {
 	bitmapStartAddr := alloc.poolsHdr.Data + uintptr(alloc.poolsHdr.Len)*sizeofPool
 	poolIndex := 0
 	multiboot.VisitMemRegions(func(region *multiboot.MemoryMapEntry) bool {
-		if region.Type != multiboot.MemAvailable {
+		switch region.Type {
+		case multiboot.MemAvailable, multiboot.MemAcpiReclaimable:
+		default:
 			return true
 		}
 
@@ -148,6 +156,7 @@ func (alloc *BitmapAllocator) setupPoolBitmaps() *kernel.Error {
 		regionEndFrame := pmm.Frame(((region.PhysAddress+region.Length) & ^pageSizeMinus1)>>mem.PageShift) - 1
 		bitmapBytes := uintptr((((regionEndFrame - regionStartFrame) + 63) &^ 63) >> 3)
 
+		alloc.pools[poolIndex].reclaimable = region.Type == multiboot.MemAcpiReclaimable
 		alloc.pools[poolIndex].startFrame = regionStartFrame
 		alloc.pools[poolIndex].endFrame = regionEndFrame
 		alloc.pools[poolIndex].freeCount = uint32(regionEndFrame - regionStartFrame + 1)
@@ -246,7 +255,7 @@ func (alloc *BitmapAllocator) printStats() {
 // returned if no more memory can be allocated.
 func (alloc *BitmapAllocator) AllocFrame() (pmm.Frame, *kernel.Error) {
 	for poolIndex := 0; poolIndex < len(alloc.pools); poolIndex++ {
-		if alloc.pools[poolIndex].freeCount == 0 {
+		if alloc.pools[poolIndex].freeCount == 0 || alloc.pools[poolIndex].reclaimable {
 			continue
 		}
 
@@ -309,6 +318,21 @@ func earlyAllocFrame() (pmm.Frame, *kernel.Error) {
 // bitmap allocator instance.
 func AllocFrame() (pmm.Frame, *kernel.Error) {
 	return bitmapAllocator.AllocFrame()
+}
+
+// ReclaimRegions scans the memory pools looking for pools which have the
+// reclaimable flag set and clears it allowing their frames to be allocated.
+func ReclaimRegions() {
+	for poolIndex := 0; poolIndex < len(bitmapAllocator.pools); poolIndex++ {
+		if bitmapAllocator.pools[poolIndex].reclaimable {
+			kfmt.Printf(
+				"[bitmap_alloc] reclaiming memory at region [0x%10x - 0x%10x]\n",
+				bitmapAllocator.pools[poolIndex].startFrame.Address(),
+				bitmapAllocator.pools[poolIndex].endFrame.Address(),
+			)
+			bitmapAllocator.pools[poolIndex].reclaimable = false
+		}
+	}
 }
 
 // Init sets up the kernel physical memory allocation sub-system.

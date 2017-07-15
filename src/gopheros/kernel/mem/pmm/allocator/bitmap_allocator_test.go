@@ -428,3 +428,23 @@ func TestAllocatorPackageInit(t *testing.T) {
 		}
 	})
 }
+
+func TestReclaimRegions(t *testing.T) {
+	defer func() {
+		bitmapAllocator.pools = nil
+	}()
+
+	bitmapAllocator.pools = []framePool{
+		{reclaimable: false},
+		{reclaimable: true},
+		{reclaimable: false},
+	}
+
+	ReclaimRegions()
+
+	for i, pool := range bitmapAllocator.pools {
+		if pool.reclaimable {
+			t.Errorf("[pool %d] expected reclaimable flag to be cleared", i)
+		}
+	}
+}
