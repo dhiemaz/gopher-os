@@ -3,6 +3,7 @@ package hal
 import (
 	"bytes"
 	"gopheros/device"
+	"gopheros/device/acpi"
 	"gopheros/device/tty"
 	"gopheros/device/video/console"
 	"gopheros/device/video/console/font"
@@ -81,6 +82,8 @@ func DetectHardware() {
 		// Sync terminal contents with console
 		devices.activeTTY.SetState(tty.StateActive)
 	}
+
+	probe(acpi.ProbeFuncs)
 }
 
 // probe executes the supplied hw probe functions and attempts to initialize
